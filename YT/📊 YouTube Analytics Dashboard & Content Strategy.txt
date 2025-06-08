@@ -1,0 +1,324 @@
+{
+  "nodes": [
+    {
+      "id": "schedule-analytics",
+      "name": "Weekly Analytics Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [0, 0],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 1"
+            }
+          ]
+        }
+      },
+      "typeVersion": 1.2
+    },
+    {
+      "id": "get-youtube-analytics",
+      "name": "Get YouTube Analytics Data",
+      "type": "n8n-nodes-base.youTubeAnalytics",
+      "position": [200, 0],
+      "parameters": {
+        "metrics": [
+          "views",
+          "likes",
+          "dislikes",
+          "comments",
+          "shares",
+          "subscribersGained",
+          "watchTime",
+          "averageViewDuration"
+        ],
+        "dimensions": [
+          "video",
+          "day"
+        ],
+        "startDate": "{{ $now.minus({days: 30}).toISODate() }}",
+        "endDate": "{{ $now.toISODate() }}",
+        "filters": "channel=={{ $vars.YOUTUBE_CHANNEL_ID }}"
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "analyze-performance",
+      "name": "Analyze Performance with AI",
+      "type": "n8n-nodes-base.openAi",
+      "position": [400, 0], 
+      "parameters": {
+        "resource": "chat",
+        "operation": "message",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a YouTube analytics expert. Analyze the performance data and provide actionable insights for content strategy."
+            },
+            {
+              "role": "user",
+              "content": "Analyze this YouTube performance data and provide insights:\n\n{{ JSON.stringify($json, null, 2) }}\n\nPlease provide:\n1. Top performing videos analysis\n2. Content trends and patterns\n3. Audience engagement insights\n4. Recommendations for future content\n5. Optimal posting times\n6. Growth opportunities\n\nFormat as structured JSON response."
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.3,
+          "maxTokens": 2000
+        }
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "update-analytics-sheet",
+      "name": "Update Analytics Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [600, 0],
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "{{ $vars.ANALYTICS_SHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Weekly Reports"
+        },
+        "options": {
+          "locationDefine": "append"
+        },
+        "fieldsUi": {
+          "values": [
+            {
+              "fieldId": "Date",
+              "fieldValue": "={{ $now.toISODate() }}"
+            },
+            {
+              "fieldId": "Total Views",
+              "fieldValue": "={{ $json.totalViews }}"
+            },
+            {
+              "fieldId": "Total Likes",
+              "fieldValue": "={{ $json.totalLikes }}"
+            },
+            {
+              "fieldId": "New Subscribers",
+              "fieldValue": "={{ $json.subscribersGained }}"
+            },
+            {
+              "fieldId": "Watch Time (Hours)",
+              "fieldValue": "={{ Math.round($json.totalWatchTime / 3600) }}"
+            },
+            {
+              "fieldId": "Avg View Duration",
+              "fieldValue": "={{ $json.averageViewDuration }}"
+            },
+            {
+              "fieldId": "AI Insights",
+              "fieldValue": "={{ $json.aiInsights }}"
+            }
+          ]
+        }
+      },
+      "typeVersion": 4
+    },
+    {
+      "id": "generate-content-ideas",
+      "name": "Generate Content Ideas",
+      "type": "n8n-nodes-base.openAi",
+      "position": [400, 200],
+      "parameters": {
+        "resource": "chat",
+        "operation": "message", 
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a YouTube content strategist. Generate video ideas based on performance data and trending topics."
+            },
+            {
+              "role": "user",
+              "content": "Based on this analytics data and insights:\n{{ $json.aiInsights }}\n\nGenerate 10 video ideas that would perform well. Include:\n1. Video title\n2. Brief description\n3. Target keywords\n4. Estimated performance potential\n5. Content type (tutorial, review, etc.)\n\nFormat as JSON array."
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.8,
+          "maxTokens": 2000
+        }
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "add-content-ideas-to-sheet",
+      "name": "Add Content Ideas to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [600, 200],
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "{{ $vars.GOOGLE_SHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Video Ideas"
+        },
+        "options": {
+          "locationDefine": "append"
+        }
+      },
+      "typeVersion": 4
+    },
+    {
+      "id": "create-performance-dashboard",
+      "name": "Create Performance Dashboard",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [800, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/pages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "headers": {
+          "values": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $vars.NOTION_TOKEN }}"
+            },
+            {
+              "name": "Content-Type", 
+              "value": "application/json"
+            },
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        },
+        "body": {
+          "values": [
+            {
+              "name": "parent",
+              "value": "{\"database_id\": \"{{ $vars.NOTION_DATABASE_ID }}\"}"
+            },
+            {
+              "name": "properties",
+              "value": "{\n  \"Name\": {\n    \"title\": [\n      {\n        \"text\": {\n          \"content\": \"Weekly Report - {{ $now.toFormat('yyyy-MM-dd') }}\"\n        }\n      }\n    ]\n  },\n  \"Total Views\": {\n    \"number\": {{ $json.totalViews }}\n  },\n  \"New Subscribers\": {\n    \"number\": {{ $json.subscribersGained }}\n  },\n  \"Watch Time\": {\n    \"number\": {{ Math.round($json.totalWatchTime / 3600) }}\n  }\n}"
+            }
+          ]
+        }
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "send-slack-report",
+      "name": "Send Slack Report",
+      "type": "n8n-nodes-base.slack",
+      "position": [1000, 0],
+      "parameters": {
+        "channel": "#youtube-analytics",
+        "text": "📊 *Weekly YouTube Analytics Report*\n\n📈 *Performance Overview:*\n• Total Views: {{ $json.totalViews.toLocaleString() }}\n• New Subscribers: {{ $json.subscribersGained }}\n• Watch Time: {{ Math.round($json.totalWatchTime / 3600) }} hours\n• Avg View Duration: {{ Math.round($json.averageViewDuration) }}s\n\n🎯 *Top Insights:*\n{{ $json.aiInsights }}\n\n💡 *Content Recommendations:*\n10 new video ideas have been added to the content pipeline.\n\n🔗 View full report: {{ $json.dashboardLink }}",
+        "options": {}
+      },
+      "typeVersion": 2.2
+    }
+  ],
+  "connections": {
+    "Weekly Analytics Schedule": {
+      "main": [
+        [
+          {
+            "node": "Get YouTube Analytics Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get YouTube Analytics Data": {
+      "main": [
+        [
+          {
+            "node": "Analyze Performance with AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Performance with AI": {
+      "main": [
+        [
+          {
+            "node": "Update Analytics Sheet",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Generate Content Ideas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Analytics Sheet": {
+      "main": [
+        [
+          {
+            "node": "Create Performance Dashboard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Content Ideas": {
+      "main": [
+        [
+          {
+            "node": "Add Content Ideas to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Performance Dashboard": {
+      "main": [
+        [
+          {
+            "node": "Send Slack Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "createdAt": "2024-01-15T10:30:00.000Z",
+      "updatedAt": "2024-01-15T10:30:00.000Z",
+      "id": "youtube-analytics",
+      "name": "YouTube Analytics"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2024-01-15T10:30:00.000Z",
+  "versionId": "1"
+} 

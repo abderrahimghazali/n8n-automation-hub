@@ -1,0 +1,670 @@
+{
+  "nodes": [
+    {
+      "id": "webhook-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "position": [0, 0],
+      "parameters": {},
+      "typeVersion": 1
+    },
+    {
+      "id": "schedule-trigger", 
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [0, 200],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1,3,5"
+            }
+          ]
+        }
+      },
+      "typeVersion": 1.2
+    },
+    {
+      "id": "get-video-ideas",
+      "name": "Get Video Ideas from Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [300, 100],
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "{{ $vars.GOOGLE_SHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list", 
+          "value": "Video Ideas"
+        },
+        "options": {
+          "range": "A:F"
+        }
+      },
+      "typeVersion": 4
+    },
+    {
+      "id": "filter-pending-videos",
+      "name": "Filter Pending Videos",
+      "type": "n8n-nodes-base.filter",
+      "position": [500, 100],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "status-pending",
+              "leftValue": "={{ $json.Status }}",
+              "rightValue": "Pending",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "select-first-video",
+      "name": "Select First Pending Video",
+      "type": "n8n-nodes-base.itemLists",
+      "position": [700, 100],
+      "parameters": {
+        "operation": "limit",
+        "maxItems": 1
+      },
+      "typeVersion": 3
+    },
+    {
+      "id": "update-status-processing",
+      "name": "Update Status to Processing",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [900, 100],
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "{{ $vars.GOOGLE_SHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Video Ideas"
+        },
+        "options": {},
+        "whereToUpdate": "cellRange",
+        "cellRange": "E{{ $json['Row Number'] }}",
+        "fieldsUi": {
+          "values": [
+            {
+              "fieldId": "Status",
+              "fieldValue": "Processing"
+            }
+          ]
+        }
+      },
+      "typeVersion": 4
+    },
+    {
+      "id": "generate-script",
+      "name": "Generate 10-Scene Script with GPT-4o",
+      "type": "n8n-nodes-base.openAi", 
+      "position": [1100, 100],
+      "parameters": {
+        "resource": "chat",
+        "operation": "message",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a professional YouTube scriptwriter specializing in engaging, viral content. Create compelling 10-scene scripts that hook viewers and maintain attention throughout."
+            },
+            {
+              "role": "user", 
+              "content": "Create a 10-scene YouTube script for: \"{{ $json['Video Title'] }}\"\n\nTarget audience: {{ $json['Target Audience'] }}\nVideo length: 8-12 minutes\nTone: {{ $json['Tone'] }}\n\nFor each scene, provide:\n1. Scene number and title\n2. Voiceover script (60-80 words)\n3. Detailed cinematic visual description for image generation\n4. Transition suggestion\n\nFormat as JSON with this structure:\n{\n  \"title\": \"video title\",\n  \"description\": \"video description\",\n  \"tags\": [\"tag1\", \"tag2\"],\n  \"scenes\": [\n    {\n      \"scene_number\": 1,\n      \"scene_title\": \"Hook/Opening\",\n      \"voiceover\": \"script text\",\n      \"visual_prompt\": \"detailed image prompt\",\n      \"transition\": \"fade/slide/zoom\"\n    }\n  ]\n}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 4000
+        }
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "parse-script-json",
+      "name": "Parse Script JSON",
+      "type": "n8n-nodes-base.json",
+      "position": [1300, 100],
+      "parameters": {
+        "operation": "parse",
+        "jsonInput": "={{ $json.choices[0].message.content }}"
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "split-scenes",
+      "name": "Split Scenes",
+      "type": "n8n-nodes-base.splitOut",
+      "position": [1500, 100],
+      "parameters": {
+        "fieldToSplitOut": "scenes",
+        "options": {}
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "generate-visuals",
+      "name": "Generate Visuals with JSON2Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1700, 100],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.json2video.com/v2/movies",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "headers": {
+          "values": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "body": {
+          "values": [
+            {
+              "name": "project",
+              "value": "{\n  \"resolution\": \"1920x1080\",\n  \"quality\": \"high\",\n  \"fps\": 30,\n  \"elements\": [\n    {\n      \"type\": \"image\",\n      \"src\": \"{{ $json.generated_image_url }}\",\n      \"start\": {{ ($json.scene_number - 1) * 8 }},\n      \"duration\": 8,\n      \"animation\": \"{{ $json.transition }}\"\n    },\n    {\n      \"type\": \"text\",\n      \"text\": \"{{ $json.voiceover }}\",\n      \"start\": {{ ($json.scene_number - 1) * 8 }},\n      \"duration\": 8,\n      \"style\": {\n        \"fontSize\": 48,\n        \"color\": \"#FFFFFF\",\n        \"backgroundColor\": \"rgba(0,0,0,0.7)\",\n        \"position\": \"bottom\"\n      }\n    }\n  ]\n}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "wait-for-video-render",
+      "name": "Wait for Video Render",
+      "type": "n8n-nodes-base.wait",
+      "position": [1900, 100],
+      "parameters": {
+        "amount": 30,
+        "unit": "seconds"
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "check-render-status",
+      "name": "Check Render Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [2100, 100],
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.json2video.com/v2/movies/{{ $json.project_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "generate-voiceover",
+      "name": "Generate Voiceover with ElevenLabs",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1500, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.elevenlabs.io/v1/text-to-speech/{{ $vars.ELEVENLABS_VOICE_ID }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "headers": {
+          "values": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "body": {
+          "values": [
+            {
+              "name": "text",
+              "value": "{{ $json.voiceover }}"
+            },
+            {
+              "name": "model_id",
+              "value": "eleven_multilingual_v2"
+            },
+            {
+              "name": "voice_settings",
+              "value": "{\n  \"stability\": 0.75,\n  \"similarity_boost\": 0.85,\n  \"style\": 0.1,\n  \"use_speaker_boost\": true\n}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "combine-audio-scenes",
+      "name": "Combine Audio Scenes",
+      "type": "n8n-nodes-base.aggregate",
+      "position": [1700, 300],
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "merge-video-audio",
+      "name": "Merge Video and Audio",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [2300, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.json2video.com/v2/movies/{{ $json.video_id }}/audio",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "headers": {
+          "values": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "body": {
+          "values": [
+            {
+              "name": "audio_url",
+              "value": "{{ $json.combined_audio_url }}"
+            }
+          ]
+        }
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "upload-to-youtube",
+      "name": "Upload to YouTube",
+      "type": "n8n-nodes-base.youTube",
+      "position": [2500, 200],
+      "parameters": {
+        "resource": "video",
+        "operation": "upload",
+        "title": "={{ $json.title }}",
+        "description": "={{ $json.description }}",
+        "tags": {
+          "tags": "={{ $json.tags }}"
+        },
+        "categoryId": "22",
+        "privacyStatus": "private",
+        "binaryData": true,
+        "binaryPropertyName": "data"
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "update-sheet-success",
+      "name": "Update Sheet - Success",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [2700, 200],
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "{{ $vars.GOOGLE_SHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Video Ideas"
+        },
+        "whereToUpdate": "cellRange",
+        "cellRange": "E{{ $json['Row Number'] }}:F{{ $json['Row Number'] }}",
+        "fieldsUi": {
+          "values": [
+            {
+              "fieldId": "Status",
+              "fieldValue": "Completed"
+            },
+            {
+              "fieldId": "YouTube Link",
+              "fieldValue": "https://youtube.com/watch?v={{ $json.id }}"
+            }
+          ]
+        }
+      },
+      "typeVersion": 4
+    },
+    {
+      "id": "error-handler",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.errorTrigger",
+      "position": [2300, 400],
+      "parameters": {},
+      "typeVersion": 1
+    },
+    {
+      "id": "update-sheet-error",
+      "name": "Update Sheet - Error",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [2500, 400],
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "list", 
+          "value": "{{ $vars.GOOGLE_SHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Video Ideas"
+        },
+        "whereToUpdate": "cellRange",
+        "cellRange": "E{{ $json['Row Number'] }}",
+        "fieldsUi": {
+          "values": [
+            {
+              "fieldId": "Status",
+              "fieldValue": "Error"
+            }
+          ]
+        }
+      },
+      "typeVersion": 4
+    },
+    {
+      "id": "retry-mechanism",
+      "name": "Retry Logic",
+      "type": "n8n-nodes-base.code",
+      "position": [2700, 400],
+      "parameters": {
+        "jsCode": "// Simple retry mechanism\nconst retryCount = $execution.getNodeParameter('retryCount', 0) || 0;\nconst maxRetries = 3;\n\nif (retryCount < maxRetries) {\n  // Wait before retry\n  await new Promise(resolve => setTimeout(resolve, 5000 * (retryCount + 1)));\n  \n  return [{\n    json: {\n      ...items[0].json,\n      retryCount: retryCount + 1,\n      shouldRetry: true\n    }\n  }];\n} else {\n  return [{\n    json: {\n      ...items[0].json,\n      shouldRetry: false,\n      finalError: true\n    }\n  }];\n}"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "notification-success",
+      "name": "Success Notification",
+      "type": "n8n-nodes-base.slack",
+      "position": [2900, 200],
+      "parameters": {
+        "channel": "#youtube-automation",
+        "text": "✅ Successfully created and uploaded YouTube video: {{ $json.title }}\\nLink: {{ $json.youtube_link }}",
+        "options": {}
+      },
+      "typeVersion": 2.2
+    },
+    {
+      "id": "notification-error",
+      "name": "Error Notification", 
+      "type": "n8n-nodes-base.slack",
+      "position": [2900, 400],
+      "parameters": {
+        "channel": "#youtube-automation",
+        "text": "❌ Failed to create YouTube video: {{ $json.title }}\\nError: {{ $json.error }}",
+        "options": {}
+      },
+      "typeVersion": 2.2
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Video Ideas from Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Video Ideas from Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Video Ideas from Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Filter Pending Videos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Pending Videos": {
+      "main": [
+        [
+          {
+            "node": "Select First Pending Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select First Pending Video": {
+      "main": [
+        [
+          {
+            "node": "Update Status to Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Status to Processing": {
+      "main": [
+        [
+          {
+            "node": "Generate 10-Scene Script with GPT-4o",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate 10-Scene Script with GPT-4o": {
+      "main": [
+        [
+          {
+            "node": "Parse Script JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Script JSON": {
+      "main": [
+        [
+          {
+            "node": "Split Scenes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Scenes": {
+      "main": [
+        [
+          {
+            "node": "Generate Visuals with JSON2Video",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Generate Voiceover with ElevenLabs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Visuals with JSON2Video": {
+      "main": [
+        [
+          {
+            "node": "Wait for Video Render",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Video Render": {
+      "main": [
+        [
+          {
+            "node": "Check Render Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Voiceover with ElevenLabs": {
+      "main": [
+        [
+          {
+            "node": "Combine Audio Scenes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combine Audio Scenes": {
+      "main": [
+        [
+          {
+            "node": "Merge Video and Audio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Video and Audio": {
+      "main": [
+        [
+          {
+            "node": "Upload to YouTube",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to YouTube": {
+      "main": [
+        [
+          {
+            "node": "Update Sheet - Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Sheet - Success": {
+      "main": [
+        [
+          {
+            "node": "Success Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Handler": {
+      "main": [
+        [
+          {
+            "node": "Update Sheet - Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Sheet - Error": {
+      "main": [
+        [
+          {
+            "node": "Retry Logic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry Logic": {
+      "main": [
+        [
+          {
+            "node": "Error Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "error-handler"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "createdAt": "2024-01-15T10:30:00.000Z",
+      "updatedAt": "2024-01-15T10:30:00.000Z",
+      "id": "youtube-automation",
+      "name": "YouTube Automation"
+    }
+  ],
+  "triggerCount": 2,
+  "updatedAt": "2024-01-15T10:30:00.000Z",
+  "versionId": "1"
+} 

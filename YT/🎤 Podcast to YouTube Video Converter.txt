@@ -1,0 +1,570 @@
+{
+  "nodes": [
+    {
+      "id": "rss-trigger",
+      "name": "RSS Feed Trigger",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "position": [0, 0],
+      "parameters": {
+        "url": "{{ $vars.PODCAST_RSS_FEED }}",
+        "options": {
+          "ignoreCache": false
+        }
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "check-new-episodes",
+      "name": "Check for New Episodes",
+      "type": "n8n-nodes-base.filter",
+      "position": [200, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "new-episode",
+              "leftValue": "={{ $now.diff($json.pubDate, 'hours') }}",
+              "rightValue": 24,
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "download-audio",
+      "name": "Download Podcast Audio",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [400, 0],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.enclosure.url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "transcribe-audio",
+      "name": "Transcribe with Whisper",
+      "type": "n8n-nodes-base.openAi",
+      "position": [600, 0],
+      "parameters": {
+        "resource": "audio",
+        "operation": "transcribe",
+        "model": "whisper-1",
+        "binaryPropertyName": "data",
+        "options": {
+          "language": "en",
+          "response_format": "verbose_json"
+        }
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "analyze-content",
+      "name": "Analyze Content & Generate Chapters",
+      "type": "n8n-nodes-base.openAi",
+      "position": [800, 0],
+      "parameters": {
+        "resource": "chat",
+        "operation": "message",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a podcast content analyzer. Create engaging YouTube video chapters, descriptions, and visual concepts from podcast transcripts."
+            },
+            {
+              "role": "user",
+              "content": "Analyze this podcast transcript and create:\n\nPodcast Title: {{ $json.title }}\nDescription: {{ $json.description }}\nTranscript: {{ $json.transcript }}\n\nPlease provide:\n1. 8-12 video chapters with timestamps\n2. Engaging YouTube title (different from podcast title)\n3. YouTube description with timestamps\n4. Key topics and themes\n5. Visual concepts for each chapter\n6. Suggested tags\n7. Thumbnail concept\n\nFormat as JSON:\n{\n  \"youtube_title\": \"...\",\n  \"description\": \"...\",\n  \"chapters\": [\n    {\n      \"title\": \"...\",\n      \"start_time\": 0,\n      \"duration\": 300,\n      \"visual_concept\": \"...\",\n      \"summary\": \"...\"\n    }\n  ],\n  \"tags\": [...],\n  \"thumbnail_concept\": \"...\"\n}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 3000
+        }
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "parse-analysis",
+      "name": "Parse Analysis Results",
+      "type": "n8n-nodes-base.json",
+      "position": [1000, 0],
+      "parameters": {
+        "operation": "parse",
+        "jsonInput": "={{ $json.choices[0].message.content }}"
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "generate-thumbnail",
+      "name": "Generate Thumbnail",
+      "type": "n8n-nodes-base.openAi",
+      "position": [1000, 200],
+      "parameters": {
+        "resource": "image",
+        "operation": "generate",
+        "prompt": "Create a professional YouTube thumbnail for podcast episode: {{ $json.thumbnail_concept }}. Style: Bold title text, professional podcast microphone, engaging colors, high contrast, click-worthy design. Include podcast branding elements.",
+        "size": "1792x1024",
+        "n": 1
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "split-chapters",
+      "name": "Split Chapters",
+      "type": "n8n-nodes-base.splitOut",
+      "position": [1200, 0],
+      "parameters": {
+        "fieldToSplitOut": "chapters",
+        "options": {}
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "generate-chapter-visuals",
+      "name": "Generate Chapter Visuals",
+      "type": "n8n-nodes-base.openAi",
+      "position": [1400, 0],
+      "parameters": {
+        "resource": "image",
+        "operation": "generate",
+        "prompt": "Create a visual for podcast chapter: {{ $json.visual_concept }}. Style: Clean, professional, podcast-themed, suitable for video background. Abstract or conceptual design with muted colors that won't distract from audio content.",
+        "size": "1792x1024",
+        "n": 1
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "aggregate-visuals",
+      "name": "Aggregate Chapter Visuals",
+      "type": "n8n-nodes-base.aggregate",
+      "position": [1600, 0],
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "create-video-project",
+      "name": "Create Video with JSON2Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1800, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.json2video.com/v2/movies",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "headers": {
+          "values": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "body": {
+          "values": [
+            {
+              "name": "project",
+              "value": "{\n  \"resolution\": \"1920x1080\",\n  \"quality\": \"high\",\n  \"fps\": 30,\n  \"elements\": [\n    {\n      \"type\": \"audio\",\n      \"src\": \"{{ $json.audio_url }}\",\n      \"start\": 0,\n      \"duration\": \"auto\"\n    },\n    {\n      \"type\": \"image\",\n      \"src\": \"{{ $json.podcast_logo }}\",\n      \"start\": 0,\n      \"duration\": 10,\n      \"style\": {\n        \"position\": \"center\",\n        \"width\": \"400px\",\n        \"height\": \"400px\"\n      }\n    },\n    {\n      \"type\": \"text\",\n      \"text\": \"{{ $json.youtube_title }}\",\n      \"start\": 0,\n      \"duration\": 10,\n      \"style\": {\n        \"fontSize\": 64,\n        \"fontWeight\": \"bold\",\n        \"color\": \"#FFFFFF\",\n        \"position\": \"bottom\",\n        \"textAlign\": \"center\",\n        \"backgroundColor\": \"rgba(0,0,0,0.8)\",\n        \"padding\": 20\n      }\n    }\n  ].concat({{ JSON.stringify($json.chapter_elements) }})\n}"
+            }
+          ]
+        }
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "wait-for-render",
+      "name": "Wait for Video Render",
+      "type": "n8n-nodes-base.wait",
+      "position": [2000, 0],
+      "parameters": {
+        "amount": 120,
+        "unit": "seconds"
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "check-render-status",
+      "name": "Check Render Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [2200, 0],
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.json2video.com/v2/movies/{{ $json.project_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "download-video",
+      "name": "Download Rendered Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [2400, 0],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.download_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "upload-to-youtube",
+      "name": "Upload to YouTube",
+      "type": "n8n-nodes-base.youTube",
+      "position": [2600, 0],
+      "parameters": {
+        "resource": "video",
+        "operation": "upload",
+        "title": "={{ $json.youtube_title }}",
+        "description": "🎙️ {{ $json.description }}\n\n⏰ **Chapters:**\n{{ $json.chapters.map((ch, i) => `${Math.floor(ch.start_time/60)}:${(ch.start_time%60).toString().padStart(2, '0')} - ${ch.title}`).join('\\n') }}\n\n🔗 **Listen to the full podcast:**\n{{ $json.original_podcast_link }}\n\n{{ $json.tags.map(tag => '#' + tag).join(' ') }}",
+        "tags": {
+          "tags": "={{ $json.tags }}"
+        },
+        "categoryId": "22",
+        "privacyStatus": "public",
+        "binaryData": true,
+        "binaryPropertyName": "data"
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "add-chapters-to-video",
+      "name": "Add Chapters to YouTube Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [2800, 0],
+      "parameters": {
+        "method": "PUT",
+        "url": "https://www.googleapis.com/youtube/v3/videos",
+        "authentication": "oAuth2Api",
+        "headers": {
+          "values": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "qs": {
+          "part": "snippet"
+        },
+        "body": {
+          "values": [
+            {
+              "name": "id",
+              "value": "={{ $json.id }}"
+            },
+            {
+              "name": "snippet",
+              "value": "{\n  \"categoryId\": \"22\",\n  \"description\": \"{{ $json.description_with_chapters }}\"\n}"
+            }
+          ]
+        }
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "update-tracking-sheet",
+      "name": "Update Tracking Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [3000, 0],
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "{{ $vars.PODCAST_TRACKING_SHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Converted Episodes"
+        },
+        "options": {
+          "locationDefine": "append"
+        },
+        "fieldsUi": {
+          "values": [
+            {
+              "fieldId": "Date Converted",
+              "fieldValue": "={{ $now.toISODate() }}"
+            },
+            {
+              "fieldId": "Original Podcast Title",
+              "fieldValue": "={{ $json.original_title }}"
+            },
+            {
+              "fieldId": "YouTube Title",
+              "fieldValue": "={{ $json.youtube_title }}"
+            },
+            {
+              "fieldId": "YouTube Video ID",
+              "fieldValue": "={{ $json.id }}"
+            },
+            {
+              "fieldId": "YouTube URL",
+              "fieldValue": "https://youtube.com/watch?v={{ $json.id }}"
+            },
+            {
+              "fieldId": "Original Podcast URL",
+              "fieldValue": "={{ $json.original_podcast_link }}"
+            },
+            {
+              "fieldId": "Chapter Count",
+              "fieldValue": "={{ $json.chapters.length }}"
+            },
+            {
+              "fieldId": "Duration (minutes)",
+              "fieldValue": "={{ Math.round($json.duration / 60) }}"
+            },
+            {
+              "fieldId": "Status",
+              "fieldValue": "Published"
+            }
+          ]
+        }
+      },
+      "typeVersion": 4
+    },
+    {
+      "id": "notify-completion",
+      "name": "Notify Team",
+      "type": "n8n-nodes-base.slack",
+      "position": [3200, 0],
+      "parameters": {
+        "channel": "#content-automation",
+        "text": "🎙️ *New Podcast Video Published!*\n\n📺 *YouTube Video:* {{ $json.youtube_title }}\n🔗 *URL:* https://youtube.com/watch?v={{ $json.id }}\n⏱️ *Duration:* {{ Math.round($json.duration / 60) }} minutes\n📚 *Chapters:* {{ $json.chapters.length }}\n🎧 *Original Podcast:* {{ $json.original_title }}\n\n✅ Auto-generated with chapters, visuals, and optimized description!",
+        "options": {}
+      },
+      "typeVersion": 2.2
+    }
+  ],
+  "connections": {
+    "RSS Feed Trigger": {
+      "main": [
+        [
+          {
+            "node": "Check for New Episodes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check for New Episodes": {
+      "main": [
+        [
+          {
+            "node": "Download Podcast Audio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Podcast Audio": {
+      "main": [
+        [
+          {
+            "node": "Transcribe with Whisper",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcribe with Whisper": {
+      "main": [
+        [
+          {
+            "node": "Analyze Content & Generate Chapters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Content & Generate Chapters": {
+      "main": [
+        [
+          {
+            "node": "Parse Analysis Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Analysis Results": {
+      "main": [
+        [
+          {
+            "node": "Split Chapters",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Generate Thumbnail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Chapters": {
+      "main": [
+        [
+          {
+            "node": "Generate Chapter Visuals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Chapter Visuals": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Chapter Visuals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Chapter Visuals": {
+      "main": [
+        [
+          {
+            "node": "Create Video with JSON2Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Video with JSON2Video": {
+      "main": [
+        [
+          {
+            "node": "Wait for Video Render",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Video Render": {
+      "main": [
+        [
+          {
+            "node": "Check Render Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Render Status": {
+      "main": [
+        [
+          {
+            "node": "Download Rendered Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Rendered Video": {
+      "main": [
+        [
+          {
+            "node": "Upload to YouTube",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to YouTube": {
+      "main": [
+        [
+          {
+            "node": "Add Chapters to YouTube Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Chapters to YouTube Video": {
+      "main": [
+        [
+          {
+            "node": "Update Tracking Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Tracking Sheet": {
+      "main": [
+        [
+          {
+            "node": "Notify Team",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "createdAt": "2024-01-15T10:30:00.000Z",
+      "updatedAt": "2024-01-15T10:30:00.000Z",
+      "id": "podcast-to-youtube",
+      "name": "Podcast to YouTube"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2024-01-15T10:30:00.000Z",
+  "versionId": "1"
+} 

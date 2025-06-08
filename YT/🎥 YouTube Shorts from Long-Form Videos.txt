@@ -1,0 +1,528 @@
+{
+  "nodes": [
+    {
+      "id": "webhook-trigger",
+      "name": "New Video Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [0, 0],
+      "parameters": {
+        "path": "youtube-video-uploaded",
+        "httpMethod": "POST",
+        "responseMode": "responseNode"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "get-video-details",
+      "name": "Get Video Details",
+      "type": "n8n-nodes-base.youTube",
+      "position": [200, 0],
+      "parameters": {
+        "resource": "video",
+        "operation": "get",
+        "videoId": "={{ $json.body.videoId }}"
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "download-video",
+      "name": "Download Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [400, 0],
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.youtube.com/youtube/v3/videos",
+        "qs": {
+          "id": "={{ $json.id }}",
+          "part": "snippet,contentDetails",
+          "key": "{{ $vars.YOUTUBE_API_KEY }}"
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "extract-transcript",
+      "name": "Extract Video Transcript",
+      "type": "n8n-nodes-youtube-transcription.youtubeTranscripter",
+      "position": [600, 0],
+      "parameters": {
+        "videoId": "={{ $json.id }}"
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "analyze-for-highlights",
+      "name": "Analyze for Highlights",
+      "type": "n8n-nodes-base.openAi",
+      "position": [800, 0],
+      "parameters": {
+        "resource": "chat",
+        "operation": "message",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a video content editor specializing in creating engaging YouTube Shorts. Analyze transcripts and identify the most engaging 60-second segments."
+            },
+            {
+              "role": "user",
+              "content": "Analyze this video transcript and identify 3-5 potential YouTube Shorts (60 seconds each):\n\nVideo Title: {{ $json.title }}\nTranscript: {{ $json.transcript }}\n\nFor each potential short, provide:\n1. Start time (in seconds)\n2. End time (in seconds) \n3. Hook/title for the short\n4. Key points covered\n5. Engagement potential (1-10)\n6. Recommended hashtags\n7. Short description\n\nPrioritize segments with:\n- Strong hooks/openings\n- Valuable tips or insights\n- Emotional moments\n- Clear conclusions\n\nFormat as JSON array."
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 2000
+        }
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "select-best-segments",
+      "name": "Select Best Segments",
+      "type": "n8n-nodes-base.code",
+      "position": [1000, 0],
+      "parameters": {
+        "jsCode": "// Parse AI response and select top 3 segments by engagement potential\nconst segments = JSON.parse(items[0].json.choices[0].message.content);\n\n// Sort by engagement potential and select top 3\nconst bestSegments = segments\n  .sort((a, b) => b.engagement_potential - a.engagement_potential)\n  .slice(0, 3);\n\nreturn bestSegments.map((segment, index) => ({\n  json: {\n    ...segment,\n    priority: index + 1,\n    originalVideoId: items[0].json.originalVideoId,\n    originalTitle: items[0].json.originalTitle\n  }\n}));"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "extract-video-segment",
+      "name": "Extract Video Segment",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1200, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.json2video.com/v2/movies",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "headers": {
+          "values": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "body": {
+          "values": [
+            {
+              "name": "project",
+              "value": "{\n  \"resolution\": \"1080x1920\",\n  \"quality\": \"high\",\n  \"fps\": 30,\n  \"elements\": [\n    {\n      \"type\": \"video\",\n      \"src\": \"{{ $json.videoUrl }}\",\n      \"start\": 0,\n      \"duration\": 60,\n      \"trim\": {\n        \"start\": {{ $json.start_time }},\n        \"end\": {{ $json.end_time }}\n      },\n      \"transform\": {\n        \"scale\": \"crop\",\n        \"position\": \"center\"\n      }\n    },\n    {\n      \"type\": \"text\",\n      \"text\": \"{{ $json.hook }}\",\n      \"start\": 0,\n      \"duration\": 3,\n      \"style\": {\n        \"fontSize\": 72,\n        \"fontWeight\": \"bold\",\n        \"color\": \"#FFFFFF\",\n        \"backgroundColor\": \"rgba(0,0,0,0.8)\",\n        \"position\": \"top\",\n        \"textAlign\": \"center\",\n        \"padding\": 20\n      }\n    }\n  ]\n}"
+            }
+          ]
+        }
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "add-captions",
+      "name": "Add Auto-Captions",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1400, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.rev.ai/speechtotext/v1/jobs",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "headers": {
+          "values": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $vars.REV_AI_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "body": {
+          "values": [
+            {
+              "name": "media_url",
+              "value": "{{ $json.video_url }}"
+            },
+            {
+              "name": "options",
+              "value": "{\n  \"language\": \"en\",\n  \"verbatim\": false,\n  \"remove_disfluencies\": true,\n  \"speaker_channels_count\": 1\n}"
+            }
+          ]
+        }
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "wait-for-captions",
+      "name": "Wait for Caption Processing",
+      "type": "n8n-nodes-base.wait",
+      "position": [1600, 0],
+      "parameters": {
+        "amount": 30,
+        "unit": "seconds"
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "get-captions",
+      "name": "Get Generated Captions",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1800, 0],
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.rev.ai/speechtotext/v1/jobs/{{ $json.id }}/captions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "headers": {
+          "values": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $vars.REV_AI_TOKEN }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/vnd.rev.caption.v1.0+json"
+            }
+          ]
+        }
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "overlay-captions",
+      "name": "Overlay Captions on Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [2000, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.json2video.com/v2/movies/{{ $json.video_id }}/overlay",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "headers": {
+          "values": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "body": {
+          "values": [
+            {
+              "name": "captions",
+              "value": "{{ $json.captions }}"
+            },
+            {
+              "name": "style",
+              "value": "{\n  \"fontSize\": 42,\n  \"fontWeight\": \"bold\",\n  \"color\": \"#FFFFFF\",\n  \"backgroundColor\": \"rgba(0,0,0,0.8)\",\n  \"position\": \"bottom\",\n  \"textAlign\": \"center\",\n  \"padding\": 15,\n  \"borderRadius\": 8\n}"
+            }
+          ]
+        }
+      },
+      "typeVersion": 4.2
+    },
+    {
+      "id": "generate-thumbnail",
+      "name": "Generate Thumbnail",
+      "type": "n8n-nodes-base.openAi",
+      "position": [1200, 200],
+      "parameters": {
+        "resource": "image",
+        "operation": "generate",
+        "prompt": "Create an eye-catching YouTube Shorts thumbnail for: {{ $json.hook }}. Style: Bold text, vibrant colors, mobile-optimized vertical format, engaging visual elements. Make it click-worthy and professional.",
+        "size": "1024x1024",
+        "n": 1
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "upload-as-youtube-short",
+      "name": "Upload as YouTube Short",
+      "type": "n8n-nodes-base.youTube",
+      "position": [2200, 0],
+      "parameters": {
+        "resource": "video",
+        "operation": "upload",
+        "title": "{{ $json.hook }}",
+        "description": "{{ $json.description }}\n\n{{ $json.hashtags.map(tag => '#' + tag).join(' ') }}\n\n#Shorts #{{ $json.originalTitle.replace(/\\s+/g, '') }}",
+        "tags": {
+          "tags": "={{ $json.recommended_hashtags }}"
+        },
+        "categoryId": "22",
+        "privacyStatus": "public",
+        "binaryData": true,
+        "binaryPropertyName": "video_file"
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "update-tracking-sheet",
+      "name": "Update Tracking Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [2400, 0],
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "{{ $vars.SHORTS_TRACKING_SHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Generated Shorts"
+        },
+        "options": {
+          "locationDefine": "append"
+        },
+        "fieldsUi": {
+          "values": [
+            {
+              "fieldId": "Date Created",
+              "fieldValue": "={{ $now.toISODate() }}"
+            },
+            {
+              "fieldId": "Original Video",
+              "fieldValue": "={{ $json.originalTitle }}"
+            },
+            {
+              "fieldId": "Short Title",
+              "fieldValue": "={{ $json.hook }}"
+            },
+            {
+              "fieldId": "YouTube Short ID",
+              "fieldValue": "={{ $json.id }}"
+            },
+            {
+              "fieldId": "YouTube Short URL",
+              "fieldValue": "https://youtube.com/shorts/{{ $json.id }}"
+            },
+            {
+              "fieldId": "Priority",
+              "fieldValue": "={{ $json.priority }}"
+            },
+            {
+              "fieldId": "Hashtags",
+              "fieldValue": "={{ $json.recommended_hashtags.join(', ') }}"
+            },
+            {
+              "fieldId": "Status",
+              "fieldValue": "Published"
+            }
+          ]
+        }
+      },
+      "typeVersion": 4
+    },
+    {
+      "id": "notify-completion",
+      "name": "Notify Completion",
+      "type": "n8n-nodes-base.slack",
+      "position": [2600, 0],
+      "parameters": {
+        "channel": "#youtube-automation",
+        "text": "🎬 *New YouTube Short Created!*\n\n📹 *Original Video:* {{ $json.originalTitle }}\n🎯 *Short Title:* {{ $json.hook }}\n🔗 *Short URL:* https://youtube.com/shorts/{{ $json.id }}\n📊 *Priority:* {{ $json.priority }}/3\n🏷️ *Hashtags:* {{ $json.recommended_hashtags.join(', ') }}\n\n✅ Auto-generated with captions and optimized for mobile viewing!",
+        "options": {}
+      },
+      "typeVersion": 2.2
+    },
+    {
+      "id": "respond-to-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [2800, 0],
+      "parameters": {
+        "options": {},
+        "responseBody": "{\n  \"success\": true,\n  \"message\": \"YouTube Short creation initiated\",\n  \"shortId\": \"{{ $json.id }}\",\n  \"shortUrl\": \"https://youtube.com/shorts/{{ $json.id }}\"\n}"
+      },
+      "typeVersion": 1.1
+    }
+  ],
+  "connections": {
+    "New Video Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get Video Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Video Details": {
+      "main": [
+        [
+          {
+            "node": "Download Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Video": {
+      "main": [
+        [
+          {
+            "node": "Extract Video Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Video Transcript": {
+      "main": [
+        [
+          {
+            "node": "Analyze for Highlights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze for Highlights": {
+      "main": [
+        [
+          {
+            "node": "Select Best Segments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Best Segments": {
+      "main": [
+        [
+          {
+            "node": "Extract Video Segment",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Generate Thumbnail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Video Segment": {
+      "main": [
+        [
+          {
+            "node": "Add Auto-Captions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Auto-Captions": {
+      "main": [
+        [
+          {
+            "node": "Wait for Caption Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Caption Processing": {
+      "main": [
+        [
+          {
+            "node": "Get Generated Captions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Generated Captions": {
+      "main": [
+        [
+          {
+            "node": "Overlay Captions on Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Overlay Captions on Video": {
+      "main": [
+        [
+          {
+            "node": "Upload as YouTube Short",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload as YouTube Short": {
+      "main": [
+        [
+          {
+            "node": "Update Tracking Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Tracking Sheet": {
+      "main": [
+        [
+          {
+            "node": "Notify Completion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Completion": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "createdAt": "2024-01-15T10:30:00.000Z",
+      "updatedAt": "2024-01-15T10:30:00.000Z",
+      "id": "youtube-shorts",
+      "name": "YouTube Shorts"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2024-01-15T10:30:00.000Z",
+  "versionId": "1"
+} 

@@ -119,3 +119,25 @@ PODCAST_RSS_FEED=your_podcast_rss_url
 6. **Customize AI prompts** based on your brand voice and style
 
 These workflows will transform your YouTube content creation process, saving hours of manual work while maintaining professional quality and consistency. 
+
+
+---
+
+## YouTube Google Sheets Automation - Full Video Creation and Publishing
+
+Complete automation for YouTube video creation and publishing using Google Sheets as the central management system.
+
+**Files:**
+- [Setup Guide](YouTube%20Google%20Sheets%20Automation%20-%20Setup%20Guide.md) - Complete setup instructions and configuration
+- [Workflow](YouTube%20Google%20Sheets%20Automation%20-%20Workflow.txt) - n8n workflow JSON for import
+
+**Features:**
+- Automated video script generation using GPT-4
+- Background music integration from Google Sheets library
+- Professional video creation via JSON2Video API
+- Direct YouTube publishing with metadata
+- Error handling and status tracking
+
+This workflow transforms your video ideas into published YouTube content with minimal manual intervention.
+
+ 

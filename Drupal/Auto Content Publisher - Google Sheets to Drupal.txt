@@ -1,0 +1,383 @@
+{
+  "meta": {
+    "instanceId": "drupal-auto-content-publisher"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "documentId": "YOUR_GOOGLE_SHEET_ID",
+        "sheetName": "Content_Queue",
+        "options": {}
+      },
+      "id": "google-sheets",
+      "name": "Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [300, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIALS",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "ready",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "filter-ready-content",
+      "name": "Filter Ready Content",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "content-mapping",
+              "name": "drupal_payload",
+              "value": "={{ {\n  \"type\": [{\n    \"target_id\": $json.content_type\n  }],\n  \"title\": [{\n    \"value\": $json.title\n  }],\n  \"body\": [{\n    \"value\": $json.body,\n    \"format\": \"full_html\"\n  }],\n  \"field_summary\": [{\n    \"value\": $json.summary\n  }],\n  \"field_tags\": $json.tags ? $json.tags.split(',').map(tag => ({\n    \"target_id\": tag.trim()\n  })) : [],\n  \"status\": [{\n    \"value\": $json.publish_status === 'published' ? 1 : 0\n  }],\n  \"field_featured_image\": $json.featured_image ? [{\n    \"target_id\": $json.featured_image\n  }] : []\n} }}",
+              "type": "object"
+            },
+            {
+              "id": "row-id-mapping",
+              "name": "row_id",
+              "value": "={{ $json.row_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "map-content",
+      "name": "Map Content",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.drupal_base_url }}/node",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-CSRF-Token",
+              "value": "={{ $json.csrf_token }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "data",
+              "value": "={{ JSON.stringify($json.drupal_payload) }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "create-drupal-node",
+      "name": "Create Drupal Node",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 300],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "YOUR_DRUPAL_CREDENTIALS",
+          "name": "Drupal Basic Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.status }}",
+                    "rightValue": 200,
+                    "operator": {
+                      "type": "number",
+                      "operation": "between",
+                      "rightValue2": 299
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Success"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.status }}",
+                    "rightValue": 400,
+                    "operator": {
+                      "type": "number",
+                      "operation": "gte"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Error"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "check-response",
+      "name": "Check Response",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "documentId": "YOUR_GOOGLE_SHEET_ID",
+        "sheetName": "Content_Queue",
+        "operation": "update",
+        "options": {},
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "published",
+            "drupal_node_id": "={{ $json.nid[0].value }}",
+            "published_at": "={{ new Date().toISOString() }}",
+            "drupal_url": "={{ $json.drupal_base_url }}/node/{{ $json.nid[0].value }}"
+          }
+        },
+        "where": {
+          "values": [
+            {
+              "column": "row_id",
+              "value": "={{ $('Map Content').first().json.row_id }}"
+            }
+          ]
+        }
+      },
+      "id": "update-sheet-success",
+      "name": "Update Sheet - Success",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [1300, 200],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIALS",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": "YOUR_GOOGLE_SHEET_ID",
+        "sheetName": "Content_Queue",
+        "operation": "update",
+        "options": {},
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "error",
+            "error_message": "={{ $json.error || 'Failed to create node' }}",
+            "updated_at": "={{ new Date().toISOString() }}"
+          }
+        },
+        "where": {
+          "values": [
+            {
+              "column": "row_id",
+              "value": "={{ $('Map Content').first().json.row_id }}"
+            }
+          ]
+        }
+      },
+      "id": "update-sheet-error",
+      "name": "Update Sheet - Error",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [1300, 400],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIALS",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "channel": "YOUR_SLACK_CHANNEL",
+        "text": "✅ New content published to Drupal!\n\n📝 Title: {{ $('Map Content').first().json.drupal_payload.title[0].value }}\n🔗 URL: {{ $json.drupal_url }}\n📅 Published: {{ new Date().toLocaleString() }}",
+        "otherOptions": {}
+      },
+      "id": "slack-notification",
+      "name": "Slack Notification",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1500, 200],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIALS",
+          "name": "Slack API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Filter Ready Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Ready Content": {
+      "main": [
+        [
+          {
+            "node": "Map Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Content": {
+      "main": [
+        [
+          {
+            "node": "Create Drupal Node",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Drupal Node": {
+      "main": [
+        [
+          {
+            "node": "Check Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Response": {
+      "main": [
+        [
+          {
+            "node": "Update Sheet - Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Sheet - Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Sheet - Success": {
+      "main": [
+        [
+          {
+            "node": "Slack Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": ["drupal", "content", "automation", "google-sheets"],
+  "triggerCount": 1,
+  "updatedAt": "2024-01-15T10:00:00.000Z",
+  "versionId": "1"
+}
+
+ 

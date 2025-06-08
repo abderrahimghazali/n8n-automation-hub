@@ -1,0 +1,319 @@
+{
+  "meta": {
+    "instanceId": "drupal-site-health-monitor"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "sites-config",
+              "name": "sites",
+              "value": "={{ [\n  {\n    \"name\": \"Production Site\",\n    \"url\": \"https://your-drupal-site.com\",\n    \"expected_status\": 200,\n    \"max_response_time\": 3000\n  },\n  {\n    \"name\": \"Staging Site\",\n    \"url\": \"https://staging.your-drupal-site.com\",\n    \"expected_status\": 200,\n    \"max_response_time\": 5000\n  }\n] }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "configure-sites",
+      "name": "Configure Sites",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [300, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "split-in-batches",
+      "name": "Split In Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "includeHeaders": true
+            }
+          }
+        }
+      },
+      "id": "check-site",
+      "name": "Check Site",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}/admin/reports/status",
+        "authentication": "genericCredentialType", 
+        "genericAuthType": "httpBasicAuth",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "check-drupal-status",
+      "name": "Check Drupal Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 300],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "YOUR_DRUPAL_CREDENTIALS",
+          "name": "Drupal Basic Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "health-data",
+              "name": "health_status",
+              "value": "={{ {\n  \"site_name\": $('Split In Batches').first().json.name,\n  \"site_url\": $('Split In Batches').first().json.url,\n  \"timestamp\": new Date().toISOString(),\n  \"response_time\": $json.response_time || 0,\n  \"status_code\": $('Check Site').first().json.status,\n  \"is_up\": $('Check Site').first().json.status >= 200 && $('Check Site').first().json.status < 400,\n  \"drupal_status\": $json.status >= 200 && $json.status < 400 ? 'accessible' : 'error',\n  \"expected_status\": $('Split In Batches').first().json.expected_status,\n  \"max_response_time\": $('Split In Batches').first().json.max_response_time,\n  \"is_healthy\": (\n    $('Check Site').first().json.status >= 200 && \n    $('Check Site').first().json.status < 400 &&\n    ($json.response_time || 0) <= $('Split In Batches').first().json.max_response_time\n  )\n} }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "analyze-health",
+      "name": "Analyze Health",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "documentId": "YOUR_GOOGLE_SHEET_ID",
+        "sheetName": "Site_Health_Log",
+        "operation": "append",
+        "options": {},
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $json.health_status.timestamp }}",
+            "site_name": "={{ $json.health_status.site_name }}",
+            "site_url": "={{ $json.health_status.site_url }}",
+            "status_code": "={{ $json.health_status.status_code }}",
+            "response_time": "={{ $json.health_status.response_time }}",
+            "is_up": "={{ $json.health_status.is_up }}",
+            "is_healthy": "={{ $json.health_status.is_healthy }}",
+            "drupal_status": "={{ $json.health_status.drupal_status }}"
+          }
+        }
+      },
+      "id": "log-to-sheets",
+      "name": "Log to Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [1300, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIALS",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.health_status.is_healthy }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "filter-unhealthy",
+      "name": "Filter Unhealthy",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [1500, 300]
+    },
+    {
+      "parameters": {
+        "channel": "YOUR_SLACK_CHANNEL",
+        "text": "🚨 Site Health Alert!\n\n🌐 Site: {{ $json.health_status.site_name }}\n🔗 URL: {{ $json.health_status.site_url }}\n📊 Status Code: {{ $json.health_status.status_code }}\n⏱️ Response Time: {{ $json.health_status.response_time }}ms\n🎯 Expected: < {{ $json.health_status.max_response_time }}ms\n📅 Time: {{ new Date($json.health_status.timestamp).toLocaleString() }}\n\n{{ $json.health_status.is_up ? '✅ Site is UP but slow' : '❌ Site is DOWN' }}",
+        "otherOptions": {}
+      },
+      "id": "slack-alert",
+      "name": "Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1700, 200],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIALS",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "alerts@your-domain.com",
+        "toEmail": "admin@your-domain.com",
+        "subject": "🚨 Drupal Site Health Alert - {{ $json.health_status.site_name }}",
+        "emailFormat": "html",
+        "message": "<h2>Site Health Alert</h2>\n<p><strong>Site:</strong> {{ $json.health_status.site_name }}</p>\n<p><strong>URL:</strong> <a href=\"{{ $json.health_status.site_url }}\">{{ $json.health_status.site_url }}</a></p>\n<p><strong>Status Code:</strong> {{ $json.health_status.status_code }}</p>\n<p><strong>Response Time:</strong> {{ $json.health_status.response_time }}ms</p>\n<p><strong>Expected:</strong> < {{ $json.health_status.max_response_time }}ms</p>\n<p><strong>Time:</strong> {{ new Date($json.health_status.timestamp).toLocaleString() }}</p>\n<p><strong>Status:</strong> {{ $json.health_status.is_up ? '✅ Site is UP but slow' : '❌ Site is DOWN' }}</p>",
+        "options": {}
+      },
+      "id": "email-alert",
+      "name": "Email Alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1700, 400],
+      "credentials": {
+        "smtp": {
+          "id": "YOUR_SMTP_CREDENTIALS",
+          "name": "SMTP"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Configure Sites",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configure Sites": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split In Batches": {
+      "main": [
+        [
+          {
+            "node": "Check Site",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Site": {
+      "main": [
+        [
+          {
+            "node": "Check Drupal Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Drupal Status": {
+      "main": [
+        [
+          {
+            "node": "Analyze Health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Health": {
+      "main": [
+        [
+          {
+            "node": "Log to Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log to Sheets": {
+      "main": [
+        [
+          {
+            "node": "Filter Unhealthy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Unhealthy": {
+      "main": [
+        [
+          {
+            "node": "Slack Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Email Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": ["drupal", "monitoring", "uptime", "performance"],
+  "triggerCount": 1,
+  "updatedAt": "2024-01-15T10:00:00.000Z",
+  "versionId": "1"
+}
+
+ 
